@@ -1,0 +1,12 @@
+[
+  {
+    "query": "How long is a password reset link valid?",
+    "expectedOutcome": "ANSWER",
+    "expectedTicketIds": ["TKT-1001"],
+    "mustNotContain": ["24 hours"]
+  },
+  {
+    "query": "How do I configure SAML for Mars colony?",
+    "expectedOutcome": "NO_MATCH"
+  }
+]

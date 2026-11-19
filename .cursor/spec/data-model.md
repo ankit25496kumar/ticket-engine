@@ -1,0 +1,458 @@
+# Data Model
+
+**Status:** Logical data model only. No JPA/Java entities, no migrations, no application code.  
+**Depends on:** `spec/requirements.md`, `spec/architecture.md`, and the stakeholder field list for Ticket and Comment.  
+**Does not decide:** HTTP resources, transition table details, chunking algorithm, RAG request/response JSON, Java/JPA mappings.
+
+**Source rule:** Ticket and Comment attributes listed by the stakeholder are **Specified** for this model. RAG index records remain **implied** by requirements. Types, allowed values, nullability, and which fields are embedded are **Open** unless noted.
+
+This document is the contract for later entity classes. Do not create entities until this model is accepted.
+
+---
+
+## 1. Purpose
+
+Persist tickets and comments, and support RAG over ticket context:
+
+| Need | Data implication |
+|------|------------------|
+| Cite ticket IDs in answers (FR-9) | A stable public ticket identifier (`ticketId`; see §8) |
+| Enforce lifecycle (FR-2–FR-6) | `Ticket.status` is one of five values |
+| Refresh embeddings when ticket data changes (FR-11) | Vectors keyed to the ticket; refresh triggers listed as open in §9 |
+| Retrieve ticket context (FR-7, FR-8, ING-1) | Index records that return context plus the cited ticket identifier |
+| Configurable `top-K` and similarity threshold | Application configuration, not Ticket columns |
+
+PostgreSQL is the system of record for Ticket and Comment (NFR-A-1, ARCH-A-3). Vector index store is still TBD (ARCH-A-3).
+
+---
+
+## 2. Entity inventory
+
+| Logical entity | Source | Store |
+|----------------|--------|--------|
+| **Ticket** | Stakeholder field list | PostgreSQL |
+| **Comment** | Stakeholder field list | PostgreSQL |
+| **TicketStatus** | Requirements (closed enum on Ticket) | Not a table; enum type stored on `Ticket.status` (DM-D-3) |
+| **TicketPriority** | Stakeholder `priority` field; closed enum (DM-D-4) | Not a table; enum type stored on `Ticket.priority` |
+| **TicketIndexRecord** | Implied by RAG requirements | Vector index (TBD) |
+| User / Agent as entities | Not listed | Out of model (`assignee` and `author` are attributes, not FKs to a User table) |
+| RAG query/answer history | Not listed | Out of model |
+| Retrieval settings table | Not listed | Out of model (see §8) |
+
+No other entities.
+
+---
+
+## 3. TicketStatus (enum)
+
+**DM-D-3:** `status` **is an enum**, not free text and not a lookup table of arbitrary rows.
+
+The allowed values are a closed set specified by the lifecycle (FR-2). An enum is the right type because invalid statuses must be impossible to persist (DM-I-3, DM-I-4), and the state machine only considers these five names.
+
+| Enum constant |
+|---------------|
+| `OPEN` |
+| `IN_PROGRESS` |
+| `RESOLVED` |
+| `CLOSED` |
+| `CANCELLED` |
+
+| Layer | How the enum is applied |
+|-------|-------------------------|
+| Domain (when entities exist) | Java enum `TicketStatus` with exactly these constants |
+| Database | Constrained column: PostgreSQL `ENUM` **or** `VARCHAR` + `CHECK` with the same five values. Either is acceptable; unconstrained `TEXT` is not. |
+| API (when specified) | JSON strings equal to the enum names above (case-sensitive) |
+
+An enum only constrains **which values exist**. It does **not** encode allowed transitions. `OPEN` → `CLOSED` is two valid enum values but an invalid transition; the **backend state machine** still rejects it (FR-6). Do not try to model the graph as extra enum values.
+
+The model stores **current** `status` only. Transition history is not modeled.
+
+---
+
+## 3.1 TicketPriority (enum)
+
+**DM-D-4:** `priority` **is an enum**, not free text.
+
+Requirements did not name priority levels. A closed set is still required so the API cannot persist arbitrary strings and so tickets can be filtered consistently. The values below are a **design decision**, not a requirement that listed these names.
+
+| Enum constant |
+|---------------|
+| `LOW` |
+| `MEDIUM` |
+| `HIGH` |
+
+| Layer | How the enum is applied |
+|-------|-------------------------|
+| Domain (when entities exist) | Java enum `TicketPriority` with exactly these constants |
+| Database | Constrained column: PostgreSQL `ENUM` **or** `VARCHAR` + `CHECK`. Unconstrained `TEXT` is not allowed. |
+| API (when specified) | JSON strings equal to the enum names above (case-sensitive) |
+
+Priority has **no state machine**. Any stored enum value may be changed to any other stored enum value unless a later spec says otherwise. Do not add `URGENT` / `CRITICAL` unless product requirements add them.
+
+**Still open (DM-Q-3):** whether `priority` is required on create, and whether a default (e.g. `MEDIUM`) is applied if omitted.
+
+---
+
+## 4. Ticket
+
+Stakeholder attributes (canonical names below). Persistence may use snake_case columns; names here are logical.
+
+| Attribute | Specified | Meaning | Unspecified |
+|-----------|-----------|---------|-------------|
+| `id` | Yes | Internal primary key of the Ticket row | Type (DM-Q-1). Generated by the persistence layer. |
+| `ticketId` | Yes | Business / public ticket identifier; **server-generated** as `TKT-{n}` (DM-D-1, DM-D-2) | Unique, immutable. **Citation ID:** see §8 |
+| `title` | Yes | Short ticket title | Required?, max length |
+| `description` | Yes | Main ticket description (replaces earlier assumed `body`) | Required?, max length |
+| `priority` | Yes | Ticket priority; **enum** `TicketPriority` (DM-D-4) | Required on create? Default? (DM-Q-3) |
+| `status` | Yes | Lifecycle state; **enum** `TicketStatus` (DM-D-3) | — |
+| `assignee` | Yes | Who the ticket is assigned to | Type (free text vs id), required? (DM-Q-4) |
+| `category` | Yes | Ticket category | Allowed values, required? (DM-Q-5) |
+| `resolutionNotes` | Yes | Notes captured when resolving | Required only in some statuses? (DM-Q-6) |
+| `createdAt` | Yes | Created timestamp | Timezone, who sets it |
+| `updatedAt` | Yes | Last update timestamp | Which writes bump it |
+
+### 4.1 Ticket invariants
+
+| ID | Invariant |
+|----|-----------|
+| DM-I-1 | `id` is unique and immutable after create. |
+| DM-I-2 | `ticketId` is unique, immutable, matches `^TKT-[0-9]+$`, and is assigned by the backend at create (DM-D-1, DM-D-2, DM-A-1). Clients do not choose it. |
+| DM-I-3 | `status` is always one of the five `TicketStatus` enum constants (DM-D-3). |
+| DM-I-3a | `priority` is always one of the three `TicketPriority` enum constants, or null if DM-Q-3 allows null (DM-D-4). |
+| DM-I-4 | Non-enum status values cannot be stored. Illegal **transitions** between valid enum values are rejected by the backend before persist. |
+| DM-I-5 | A ticket may have zero or more comments. Comments are children: `Comment.ticketId` → `Ticket.ticketId` (DM-D-5). |
+
+### 4.2 Not on Ticket
+
+Fields not in the stakeholder list are not added (tags, due dates, tenant ID, soft-delete, optimistic `version`, etc.).
+
+---
+
+## 5. Comment
+
+| Attribute | Specified | Meaning | Unspecified |
+|-----------|-----------|---------|-------------|
+| `id` | Yes | Primary key of the Comment row | Type, generation |
+| `ticketId` | Yes | Parent ticket’s public id (`TKT-1001` form) | FK target: `Ticket.ticketId` (DM-D-5) |
+| `author` | Yes | Who wrote the comment | Type (free text vs user id); no User entity |
+| `content` | Yes | Comment body | Required?, max length |
+| `createdAt` | Yes | Created timestamp | Timezone; no `updatedAt` listed — comments are append-only unless a later spec says otherwise |
+
+### 5.1 Comment invariants
+
+| ID | Invariant |
+|----|-----------|
+| DM-I-6 | Every comment belongs to exactly one ticket. |
+| DM-I-7 | A comment cannot exist without a parent ticket that already exists (no orphans). |
+| DM-I-8 | Comment has no `status` and is not part of the ticket state machine. |
+| DM-I-12 | A comment is not shared across tickets. Re-parenting is not in this model. |
+
+Comment update/delete is **unspecified** (DM-Q-11). Comments are modeled as **append-only** (no `updatedAt`, DM-A-8).
+
+---
+
+## 6. Relationships
+
+**DM-D-5:** Comment relates to Ticket as **composition**: one ticket has many comments; each comment belongs to exactly one ticket.
+
+```
+Ticket 1 ──────< 0..N  Comment
+  ticketId <────────── ticketId   (FK to public id)
+
+Ticket 1 ──────< 0..N  TicketIndexRecord
+  ticketId <────────── ticket_id  (citations; DM-A-2)
+```
+
+| Rule | Decision |
+|------|----------|
+| Cardinality | Ticket **1 — 0..N** Comment |
+| Ownership | Comment is not independent. It cannot be created without a valid parent `ticketId`. |
+| Foreign key | `Comment.ticketId` references **`Ticket.ticketId`**, not `Ticket.id`. |
+| Why not `Ticket.id`? | The stakeholder field is `ticketId`; that value is unique, immutable, and what APIs and RAG citations use (`TKT-1001`). Storing the internal PK on Comment would mix two identifiers. `Ticket.id` remains the ticket row PK only. |
+| Database | `FOREIGN KEY` from comment.`ticket_id` to ticket.`ticket_id` (snake_case as needed). `Ticket.ticketId` must be unique (already required). |
+| Nested vs sibling API | Deferred to API contract. Data model only requires the FK. Typical later shape: comments nested under a ticket (`/tickets/TKT-1001/comments`). |
+| Lifecycle | Adding a comment does **not** change `Ticket.status`. Status transitions stay on the ticket. |
+| Ticket delete | Still unspecified (DM-Q-11). If delete is added, comments **must** be removed with the ticket (or delete must be rejected while comments exist). Orphan comments are not allowed. |
+| RAG | Whether a new comment refreshes embeddings is still DM-Q-8. |
+
+Comment does not have its own index entity unless RAG ingestion says comments are embedded as separate records.
+
+---
+
+## 7. TicketIndexRecord (vector index)
+
+Unchanged in role from architecture: retrieval must return ticket context and a ticket identifier that can be cited.
+
+| Attribute | Source | Meaning |
+|-----------|--------|---------|
+| `index_record_id` | DM-A-3 | Identity of this chunk/row; **not** the citation ID |
+| `embedding` | FR-11 | Vector for similarity search (not metadata) |
+| `source_text` | DM-A-4 | Retrieved **payload** (embedded text snapshot). Not metadata. |
+| metadata | DM-D-7 | Structured fields in §7.3; must include `ticketId` |
+| `content_fingerprint` | DM-A-5 | Fingerprint of embedded payload for stale detection |
+
+Physical store, dimension, and metric remain open.
+
+### 7.1 Index invariants
+
+| ID | Invariant |
+|----|-----------|
+| DM-I-9 | Retrievable records carry `Ticket.ticketId` so answers can cite it. |
+| DM-I-10 | After a successful refresh, retrieval must not use embeddings built from superseded ticket data (FR-11). |
+| DM-I-11 | Index records do not duplicate the status machine. Corpus eligibility (e.g. exclude `CANCELLED`) is deferred to RAG ingestion. |
+| DM-I-13 | Every retrievable record’s metadata includes `ticketId` equal to `Ticket.ticketId` (DM-D-7). |
+
+### 7.3 RAG metadata
+
+Split each index record into:
+
+| Part | Role |
+|------|------|
+| **Embedding** | Similarity search only |
+| **Payload (`source_text`)** | Text the generator may use as retrieved ticket context |
+| **Metadata** | Structured fields for citation, optional filtering, and display — **not** a substitute for payload |
+
+**DM-D-7:** RAG metadata is the set below, copied from the ticket at ingest/refresh.
+
+#### Required metadata
+
+| Field | Why |
+|-------|-----|
+| `ticketId` | FR-9 / DM-A-2. The only citation identifier. Format `TKT-1001`. |
+
+Without `ticketId` on every retrievable record, answers cannot cite tickets.
+
+#### Recommended metadata (store; filter only if a later spec says so)
+
+Requirements did **not** specify metadata filters. Store these so retrieval can filter or display them without a Postgres join, and so corpus rules (DM-Q-10) can be applied in the retriever.
+
+| Field | Why |
+|-------|-----|
+| `status` | Corpus eligibility (e.g. drop `CANCELLED`) if ingestion/retrieval later requires it |
+| `priority` | Optional filter / display |
+| `category` | Optional filter / display |
+| `title` | Short label next to a citation; not a replacement for `description` in payload |
+| `updatedAt` | Staleness / debugging; not a similarity input |
+
+#### Not RAG metadata
+
+| Field | Where it belongs instead |
+|-------|--------------------------|
+| `description`, `resolutionNotes`, `Comment.content` | Payload / embedding text (DM-Q-8, DM-Q-9) |
+| `Ticket.id` | Internal PK; do not cite |
+| `assignee`, `Comment.author` | Not specified for retrieval filters; omit until a spec asks |
+| `embedding` | Vector column, not metadata |
+| `index_record_id` | Chunk identity; not a citation |
+
+Do not copy the full ticket row into metadata. Metadata is a **small structured subset**.
+
+#### Refresh
+
+- Payload fields change → re-embed and rewrite payload (FR-11).  
+- Only metadata fields change (`status`, `priority`, `category`, `title`, `updatedAt`) → **update metadata in place**; re-embed only if those fields are also in `source_text` (ingestion decides).  
+- `ticketId` never changes (DM-I-2).
+
+### 7.2 Relational indexes (PostgreSQL)
+
+List/filter HTTP APIs are **not specified** yet. Semantic search is RAG (vector), not SQL `LIKE`. Indexes below are only what the **current model** needs, plus likely filters if a ticket list is added later.
+
+#### Required now (integrity and specified access)
+
+| Index | On | Why |
+|-------|----|-----|
+| Primary key | `Ticket.id` | Row identity |
+| **Unique** | `Ticket.ticketId` | Lookup by `TKT-1001`; FK target for comments; citations (DM-D-1, DM-D-2, DM-D-5) |
+| Primary key | `Comment.id` | Row identity |
+| **B-tree** (FK) | `Comment.ticketId` | List comments for one ticket; support DM-D-5 |
+
+**DM-D-6:** These four are mandatory when tables are created. Unique `Ticket.ticketId` is not optional.
+
+PostgreSQL already indexes primary keys. A unique index on `ticketId` is still required. The FK index on `Comment.ticketId` is required even if PostgreSQL does not create it automatically.
+
+#### Recommended if ticket list/filter is added (not a product requirement yet)
+
+Typical support-queue filters on fields that already exist:
+
+| Index | On | Likely filter / sort |
+|-------|----|----------------------|
+| B-tree | `Ticket.status` | Queue by lifecycle |
+| B-tree | `Ticket.priority` | Filter `LOW` / `MEDIUM` / `HIGH` |
+| B-tree | `Ticket.assignee` | By assignee |
+| B-tree | `Ticket.category` | By category |
+| B-tree | `Ticket.createdAt` | Newest/oldest list (usually `DESC`) |
+
+A composite **`(status, createdAt DESC)`** covers “open tickets, newest first” and can replace a standalone `status` index if that is the dominant query. Do not add composites until the API contract names the actual filter combinations.
+
+#### Not required by this model
+
+| Access path | Why not a SQL index here |
+|-------------|--------------------------|
+| Semantic / natural-language search | RAG + `TicketIndexRecord` (vector), configurable top-K / threshold |
+| `title` / `description` / `resolutionNotes` / `Comment.content` substring search | Not specified. Do not add PostgreSQL full-text (`tsvector` / `ILIKE`) unless a later spec asks for keyword search. |
+| `Ticket.updatedAt` | Only if an API sorts/filters on it |
+| `Comment.author` / `Comment.createdAt` | Only if comment lists are filtered that way |
+
+Vector indexes (HNSW/IVF, pgvector, etc.) belong on `TicketIndexRecord.embedding`, not on Ticket columns (DM-Q-12 / RAG ingestion).
+
+---
+
+## 8. Identifiers and citations
+
+| Identifier | Role | Generated? |
+|------------|------|------------|
+| `Ticket.id` | Internal PK | Yes (persistence). Not for citations. |
+| `Ticket.ticketId` | Public/business id; **used in RAG citations** (DM-A-2). Format `TKT-1001`, `TKT-1002`, … (DM-D-2) | **Yes, backend on create** (DM-D-1). Not accepted from the client. |
+| `Comment.id` | Comment PK | Yes (persistence). |
+| `Comment.ticketId` | Parent public id; FK to `Ticket.ticketId` (DM-D-5) | No — must equal an existing `Ticket.ticketId`. |
+| `TicketIndexRecord.index_record_id` | Chunk identity; not cited unless a later spec says so | Yes, at index time. |
+
+**DM-D-1:** `ticketId` is generated by the backend when the ticket is created.
+
+**DM-D-2:** `ticketId` looks like **`TKT-1001`**: prefix `TKT-` plus a positive integer. Examples: `TKT-1001`, `TKT-1002`, `TKT-1010`. Pattern: `^TKT-[0-9]+$`.
+
+Rationale:
+
+- Answers must cite ticket IDs (FR-9). A short readable id is usable in RAG output and by agents; a UUID is not.
+- Client-supplied ids risk collisions and unstable citation format; `id` already exists as the internal PK.
+- Sequential values after a starting number keep generation simple and unique under a DB uniqueness constraint.
+
+Generation rules:
+
+- First issued value: **`TKT-1001`** (sequence starts at 1001, not 1).
+- Later tickets: increment the integer (`TKT-1002`, …). No zero-padding requirement (`TKT-1001` not `TKT-01001`).
+- After `TKT-9999` the number may grow (`TKT-10000`); width is not fixed.
+- Values are never reused, including after cancel.
+
+Create API (when specified): omit `ticketId` on input; return it on the created ticket. If a client sends `ticketId`, the backend must reject or ignore it — exact HTTP behavior is deferred to the API contract.
+
+**FR-9** is satisfied by citing `Ticket.ticketId`, not `Ticket.id` and not comment ids (DM-A-2).
+
+---
+
+## 9. What counts as “ticket data” for embedding refresh
+
+FR-11: embeddings refresh when ticket data changes. The stakeholder list does not say which fields are indexed.
+
+**Not decided here** (RAG ingestion). Candidates:
+
+| Change | Refresh? |
+|--------|----------|
+| `title`, `description` | Likely yes (primary text) — still ingestion’s decision |
+| `resolutionNotes` | Open |
+| `priority`, `assignee`, `category` | Open |
+| `status` only | Open (requirements A-6) |
+| New/changed Comment `content` | Open (DM-Q-8) |
+| `createdAt` / `updatedAt` only | No (timestamps are not corpus text) |
+
+Until ingestion is written, this model only states: **some** subset of Ticket (and possibly Comment) fields is ticket data; changing that subset **must** refresh embeddings.
+
+Illegal status transitions: no persist, no refresh.
+
+Ticket delete/archive: unspecified; if added, comments and index records for that ticket must be defined.
+
+---
+
+## 10. Create defaults (persistence)
+
+| Topic | Status |
+|-------|--------|
+| Initial `status` on create | Open (state machine spec) |
+| `ticketId` on create | **Server-generated** as `TKT-1001`, `TKT-1002`, … (DM-D-1, DM-D-2). Not client input. |
+| Required fields on create | Open |
+| Who sets `createdAt` / `updatedAt` | Open (typically server-set; not specified) |
+| Default `assignee`, `priority`, `category`, `resolutionNotes` | Open (`resolutionNotes` often empty until resolved — not specified) |
+
+---
+
+## 11. Configuration (not entities)
+
+| Value | Stored as |
+|-------|-----------|
+| `top-K` | Application configuration |
+| Similarity threshold | Application configuration |
+
+---
+
+## 12. Mapping to architecture stores
+
+| Architecture component | Data |
+|------------------------|------|
+| Ticket store | `Ticket`, `Comment` |
+| Vector index | `TicketIndexRecord` |
+| State machine | Reads/writes `Ticket.status` only |
+| Ingestion refresher | Reads Ticket (and Comments if in corpus) after successful data change |
+| Grounding / generator | Retrieved context + `Ticket.ticketId` |
+
+When entities are created later: map Ticket and Comment to PostgreSQL. Map `Ticket.status` to Java enum `TicketStatus` and `Ticket.priority` to Java enum `TicketPriority`, each with a constrained DB column (DM-D-3, DM-D-4). Do not invent a User table from `assignee`/`author`. Do not map `TicketIndexRecord` until the vector store is chosen.
+
+---
+
+## 13. Assumptions
+
+| ID | Assumption |
+|----|------------|
+| DM-D-1 | `ticketId` is generated by the backend at ticket create; clients do not supply it. |
+| DM-D-2 | `ticketId` format is `TKT-{n}` with `n` starting at 1001 (`TKT-1001`, `TKT-1002`, …). Pattern `^TKT-[0-9]+$`. |
+| DM-D-3 | `Ticket.status` is an enum (`OPEN`, `IN_PROGRESS`, `RESOLVED`, `CLOSED`, `CANCELLED`). Unconstrained strings are not allowed. The enum does not replace the state machine. |
+| DM-D-4 | `Ticket.priority` is an enum (`LOW`, `MEDIUM`, `HIGH`). Unconstrained strings are not allowed. No priority state machine. |
+| DM-D-5 | Comment is a child of Ticket (1:N). `Comment.ticketId` FK `Ticket.ticketId`. No orphan comments. Comments do not drive the status machine. |
+| DM-D-6 | Required PostgreSQL indexes: PK `Ticket.id`, unique `Ticket.ticketId`, PK `Comment.id`, index `Comment.ticketId`. Filter indexes on status/priority/assignee/category/createdAt are optional until the API contract defines list queries. Keyword/full-text SQL indexes are not required; RAG covers semantic search. |
+| DM-D-7 | RAG metadata **must** include `ticketId`. Recommended: `status`, `priority`, `category`, `title`, `updatedAt`. Payload (`description`, notes, comments) is not metadata. Metadata filters are unspecified; storing these fields does not by itself require filter APIs. |
+| DM-A-1 | `ticketId` is unique and immutable so citations remain valid. |
+| DM-A-2 | RAG citations use `Ticket.ticketId`, not `Ticket.id`. |
+| DM-A-3 | Index records have their own identity. |
+| DM-A-4 | Retrieved context may be a stored `source_text` snapshot. |
+| DM-A-5 | A content fingerprint exists to detect stale embeddings. |
+| DM-A-6 | Cardinality of index records per ticket is `1..N`. |
+| DM-A-7 | `assignee` and Comment `author` are stored values, not User entities. |
+| DM-A-8 | Comments have no `updatedAt`; update-in-place is not in this model. |
+
+---
+
+## 14. Open questions
+
+| ID | Question |
+|----|----------|
+| DM-Q-1 | Types for `Ticket.id`, `Comment.id` (UUID vs integer). |
+| ~~DM-Q-2~~ | **Closed** by DM-D-2 (`TKT-1001` form). |
+| DM-Q-3 | Is `priority` required on create? If omitted, is there a default (e.g. `MEDIUM`)? Allowed **values** are closed by DM-D-4. |
+| DM-Q-4 | Assignee representation and whether unassigned is allowed. |
+| DM-Q-5 | Category allowed values vs free text. |
+| DM-Q-6 | Is `resolutionNotes` required on `RESOLVED` / `CLOSED`? |
+| ~~DM-Q-7~~ | **Closed** by DM-D-5 (`Comment.ticketId` → `Ticket.ticketId`). |
+| DM-Q-8 | Are comments part of embedded ticket data? Does a new comment refresh embeddings? |
+| DM-Q-9 | Which Ticket fields besides title/description are embedded? |
+| DM-Q-10 | Corpus eligibility by `status`. |
+| DM-Q-11 | Ticket/comment delete. |
+| DM-Q-12 | Vector store physical schema. |
+| DM-Q-13 | Max lengths and required flags for text fields. |
+| DM-Q-14 | Which list filters and sorts the API will expose (determines which recommended B-trees in §7.2 to actually create). |
+
+---
+
+## 15. Out of scope for this document
+
+| Later spec | Uses this model |
+|------------|-----------------|
+| API contract | Ticket/Comment fields above only |
+| State machine | `TicketStatus` enum values and current-status storage; not the transition graph |
+| RAG ingestion | Embed fields, comments, refresh triggers; consume §7.3 metadata |
+| RAG API contract | Citations = `Ticket.ticketId` (DM-A-2) |
+| Evaluation / UI / tests | Fixtures match Ticket + Comment |
+
+---
+
+## 16. Traceability
+
+| Requirement / stakeholder list | Model element |
+|-------------------------------|---------------|
+| Stakeholder Ticket fields | §4 |
+| Stakeholder Comment fields | §5 |
+| Stakeholder `priority` | Enum `TicketPriority` `LOW` \| `MEDIUM` \| `HIGH` (DM-D-4) |
+| FR-2–FR-6 | `Ticket.status` as enum `TicketStatus` (DM-D-3); transitions still enforced by state machine |
+| FR-9, A-5 | Cite `Ticket.ticketId` (DM-A-2), server-generated `TKT-1001` form (DM-D-1, DM-D-2) |
+| FR-11, ING-2 | Refresh index when agreed ticket data changes (§9) |
+| FR-12, FR-13 | Config, not columns |
+| Comment as child of ticket | §5–§6, composition 1:N, FK `Comment.ticketId` → `Ticket.ticketId` (DM-D-5) |
+| Relational indexes | §7.2, DM-D-6 |
+| RAG metadata | §7.3, DM-D-7 (`ticketId` required) |
