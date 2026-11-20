@@ -16,6 +16,8 @@ server:
   port: 8080
 
 rag:
+  # pgvector = PostgreSQL ticket_chunk table (requires pgvector extension); in-memory = no Flyway V3
+  vector-store: pgvector
   retrieval:
     top-k: 5
     similarity-threshold: 0.72

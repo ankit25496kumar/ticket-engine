@@ -7,6 +7,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -14,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Component
 @Profile("!test")
+@ConditionalOnProperty(name = "rag.vector-store", havingValue = "pgvector", matchIfMissing = true)
 public class PgVectorTicketVectorStore implements TicketVectorStore, VectorSearchPort {
 
     private final JdbcTemplate jdbcTemplate;

@@ -9,11 +9,11 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import org.springframework.context.annotation.Profile;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 @Component
-@Profile("test")
+@ConditionalOnProperty(name = "rag.vector-store", havingValue = "in-memory")
 public class InMemoryTicketVectorStore implements TicketVectorStore, VectorSearchPort {
 
     private final Map<String, List<VectorChunk>> byTicket = new ConcurrentHashMap<>();

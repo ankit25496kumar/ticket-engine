@@ -1,4 +1,6 @@
 /home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/SupportTicketAiApplication.java
+/home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/config/DevDataSeeder.java
+/home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/config/DevRagReindexRunner.java
 /home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/rag/api/RagQueryController.java
 /home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/rag/api/dto/RagQueryRequest.java
 /home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/rag/api/dto/RagQueryResponse.java
@@ -6,7 +8,6 @@
 /home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/rag/config/RagEmbeddingProperties.java
 /home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/rag/config/RagGenerationProperties.java
 /home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/rag/config/RagRetrievalProperties.java
-/home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/rag/config/RagVectorStoreConfig.java
 /home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/rag/generation/CitationValidator.java
 /home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/rag/generation/GeneratedAnswer.java
 /home/ankit/Downloads/My Support Excercise/backend/src/main/java/com/ttn/rag/generation/GeneratorClient.java

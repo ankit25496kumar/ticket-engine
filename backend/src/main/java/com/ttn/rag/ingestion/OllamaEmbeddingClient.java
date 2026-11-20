@@ -8,6 +8,7 @@ import java.util.Map;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
@@ -50,9 +51,30 @@ public class OllamaEmbeddingClient implements EmbeddingClient {
                 throw new EmbeddingException("Embedding dimension mismatch");
             }
             return vector;
+        } catch (HttpStatusCodeException ex) {
+            throw new EmbeddingException(ollamaErrorMessage(ex.getResponseBodyAsString()), ex);
         } catch (RestClientException | java.io.IOException ex) {
-            throw new EmbeddingException("Embedding failed", ex);
+            throw new EmbeddingException("Embedding failed: is Ollama running on " + properties.getBaseUrl() + "?", ex);
         }
+    }
+
+    private static String ollamaErrorMessage(String responseBody) {
+        if (responseBody == null || responseBody.isBlank()) {
+            return "Embedding failed";
+        }
+        try {
+            var node = new ObjectMapper().readTree(responseBody);
+            if (node.has("error")) {
+                String err = node.get("error").asText();
+                if (err.contains("not found")) {
+                    return err + " (run: ollama pull <model>)";
+                }
+                return err;
+            }
+        } catch (java.io.IOException ignored) {
+            // fall through
+        }
+        return "Embedding failed";
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

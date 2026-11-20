@@ -21,6 +21,7 @@ spring:
       mode: always
 
 rag:
+  vector-store: in-memory
   retrieval:
     top-k: 5
     similarity-threshold: 0.72

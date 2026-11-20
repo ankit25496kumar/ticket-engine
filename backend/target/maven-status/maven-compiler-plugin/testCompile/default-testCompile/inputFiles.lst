@@ -1,8 +1,16 @@
 /home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/SupportTicketAiApplicationTests.java
 /home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/rag/api/RagQueryControllerTest.java
 /home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/rag/fixture/PasswordResetKnowledgeFixture.java
+/home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/rag/ingestion/TicketIngestionServiceTest.java
 /home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/rag/retrieval/RagRetrievalServicePolicyLiteralsTest.java
+/home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/rag/retrieval/RagRetrievalServiceTest.java
 /home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/rag/review/PasswordResetRagScenarioTest.java
+/home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/rag/service/RagQueryServiceTest.java
 /home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/ticket/api/DashboardControllerTest.java
 /home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/ticket/api/TicketControllerTest.java
 /home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/ticket/domain/TicketStatusTransitionPolicyTest.java
+/home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/ticket/fixture/TicketTestFixtures.java
+/home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/ticket/service/CommentServiceTest.java
+/home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/ticket/service/DashboardServiceTest.java
+/home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/ticket/service/TicketIdGeneratorTest.java
+/home/ankit/Downloads/My Support Excercise/backend/src/test/java/com/ttn/ticket/service/TicketServiceTest.java
